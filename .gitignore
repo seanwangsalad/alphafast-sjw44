@@ -16,3 +16,7 @@ misc/
 
 # OS
 .DS_Store
+
+# Generated pickles (produced by `uv run build_data`, extracted from container)
+src/alphafold3/constants/converters/ccd.pickle
+src/alphafold3/constants/converters/chemical_component_sets.pickle
