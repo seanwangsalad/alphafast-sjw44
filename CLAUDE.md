@@ -78,6 +78,25 @@ Changes on top of upstream AlphaFast:
    - `src/alphafold3/constants/converters/chemical_component_sets.pickle`
    Both are `.gitignore`d (large binaries).
 
+## Edit Scope
+
+Most of `src/alphafold3/` is upstream AF3. Tread carefully — patches diverge from `google-deepmind/alphafold3` and complicate future rebases.
+
+**Sean's mod surface (safe to extend):**
+- `src/alphafold3/data/pipeline.py` — chain dispatch, template/MSA branch logic
+- `src/alphafold3/data/msa.py`, `msa_config.py` — MSA orchestration + config
+- `src/alphafold3/data/tools/mmseqs.py`, `mmseqs_batch.py` — MMseqs wrappers
+- `src/alphafold3/common/folding_input.py` — JSON null semantics
+- `run_data_pipeline.py`, `run_alphafold.py` — CLI flags
+- `scripts/*.sh` — orchestration
+
+**Upstream (avoid unless required):**
+- `src/alphafold3/model/` — JAX/Haiku model code
+- `src/alphafold3/constants/` — chem constants, generated pickles
+- `src/alphafold3/structure/`, `cpp/` — pybind11 C++ ext
+
+If upstream edit needed, note in `claude_seanedits.md`.
+
 ## Development Setup
 
 Install (Linux x86_64/aarch64, Python 3.12 required):
