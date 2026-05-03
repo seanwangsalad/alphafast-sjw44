@@ -143,6 +143,7 @@ def _get_protein_msa_and_templates(
     pdb_database_path: str,
     run_msa_sequential: bool = False,
     temp_dir: str | None = None,
+    low_ram: bool = False,
 ) -> tuple[msa.Msa, msa.Msa, templates_lib.Templates]:
     """Processes a single protein chain.
 
@@ -214,6 +215,7 @@ def _get_protein_msa_and_templates(
                         ],
                         chain_poly_type=mmcif_names.PROTEIN_CHAIN,
                         executor=postprocess_executor,
+                        low_ram=low_ram,
                     )
 
                     # Wait for all post-processing to complete
@@ -339,6 +341,16 @@ class DataPipelineConfig:
     # instead of the system default. Can provide 10-13x speedup on clusters like DCC.
     temp_dir: str | None = None
 
+    # Memory limit for MMseqs2 database splitting (e.g. "16G").
+    # MMseqs2 splits the DB into chunks that fit in this budget instead of
+    # loading the full DB at once. Required on machines with limited RAM.
+    mmseqs_split_memory_limit: str | None = None
+
+    # Low-RAM mode: serialize MMseqs2 search + result2msa across DBs.
+    # When False (default), result2msa for DB N runs concurrent with search
+    # of DB N+1 (faster but higher peak RAM).
+    low_ram: bool = False
+
     # Pre-computed MSA support (for inference-only mode).
     # When provided, MSA search is skipped and this file is used directly.
     precomputed_msa_path: str | None = None
@@ -431,6 +443,7 @@ class DataPipeline:
                 gpu_device=data_pipeline_config.gpu_device,
                 threads=data_pipeline_config.mmseqs_n_threads,
                 temp_dir=data_pipeline_config.temp_dir,
+                split_memory_limit=data_pipeline_config.mmseqs_split_memory_limit,
             ),
             chain_poly_type=mmcif_names.PROTEIN_CHAIN,
             crop_size=None,
@@ -449,6 +462,7 @@ class DataPipeline:
                 gpu_device=data_pipeline_config.gpu_device,
                 threads=data_pipeline_config.mmseqs_n_threads,
                 temp_dir=data_pipeline_config.temp_dir,
+                split_memory_limit=data_pipeline_config.mmseqs_split_memory_limit,
             ),
             chain_poly_type=mmcif_names.PROTEIN_CHAIN,
             crop_size=None,
@@ -467,6 +481,7 @@ class DataPipeline:
                 gpu_device=data_pipeline_config.gpu_device,
                 threads=data_pipeline_config.mmseqs_n_threads,
                 temp_dir=data_pipeline_config.temp_dir,
+                split_memory_limit=data_pipeline_config.mmseqs_split_memory_limit,
             ),
             chain_poly_type=mmcif_names.PROTEIN_CHAIN,
             crop_size=None,
@@ -485,6 +500,7 @@ class DataPipeline:
                 gpu_device=data_pipeline_config.gpu_device,
                 threads=data_pipeline_config.mmseqs_n_threads,
                 temp_dir=data_pipeline_config.temp_dir,
+                split_memory_limit=data_pipeline_config.mmseqs_split_memory_limit,
             ),
             chain_poly_type=mmcif_names.PROTEIN_CHAIN,
             crop_size=None,
@@ -542,6 +558,7 @@ class DataPipeline:
         self._pdb_database_path = data_pipeline_config.pdb_database_path
         self._run_msa_sequential = data_pipeline_config.mmseqs_sequential
         self._temp_dir = data_pipeline_config.temp_dir
+        self._low_ram = data_pipeline_config.low_ram
 
         # Store template_mode for reference
         self._template_mode = data_pipeline_config.template_mode
@@ -786,6 +803,7 @@ class DataPipeline:
                                     threads=16,
                                     temp_dir=data_pipeline_config.temp_dir,
                                     search_type=3,  # Nucleotide search
+                                    split_memory_limit=data_pipeline_config.mmseqs_split_memory_limit,
                                 ),
                                 chain_poly_type=mmcif_names.RNA_CHAIN,
                                 crop_size=None,
@@ -866,6 +884,7 @@ class DataPipeline:
                 threads=cfg.threads,
                 temp_dir=self._temp_dir,
                 search_type=cfg.search_type,
+                split_memory_limit=cfg.split_memory_limit,
             )
             logging.info(
                 "Batched RNA search: %d sequences against %s",
@@ -1153,11 +1172,24 @@ class DataPipeline:
         has_paired_msa = chain.paired_msa is not None
         has_templates = chain.templates is not None
 
-        if not has_unpaired_msa and not has_paired_msa and not chain.templates:
-            # MSA None - search. Templates either [] - don't search, or None - search.
+        # Partial MSA spec is invalid: must set both or neither.
+        if has_unpaired_msa != has_paired_msa:
+            raise ValueError(
+                f"Protein chain {chain.id} has unpaired MSA or paired MSA set"
+                " only partially. Set both (or neither). Use empty string to"
+                " skip search with empty MSA."
+            )
+
+        empty_msa_a3m = msa.Msa.from_empty(
+            query_sequence=chain.sequence,
+            chain_poly_type=mmcif_names.PROTEIN_CHAIN,
+        ).to_a3m()
+
+        if not has_unpaired_msa and not has_templates:
+            # Search MSA + templates together.
             unpaired_msa, paired_msa, template_hits = _get_protein_msa_and_templates(
                 sequence=chain.sequence,
-                run_template_search=not has_templates,  # Skip template search if [].
+                run_template_search=True,
                 uniref90_msa_config=self._uniref90_msa_config,
                 mgnify_msa_config=self._mgnify_msa_config,
                 small_bfd_msa_config=self._small_bfd_msa_config,
@@ -1166,6 +1198,7 @@ class DataPipeline:
                 pdb_database_path=self._pdb_database_path,
                 run_msa_sequential=self._run_msa_sequential,
                 temp_dir=self._temp_dir,
+                low_ram=self._low_ram,
             )
             unpaired_msa = unpaired_msa.to_a3m()
             paired_msa = paired_msa.to_a3m()
@@ -1176,31 +1209,42 @@ class DataPipeline:
                 )
                 for hit, struc in template_hits.get_hits_with_structures()
             ]
-
-            # Get Foldseek templates and merge with PDB templates
             foldseek_tmpls = self._get_foldseek_templates(chain.sequence)
             templates = self._merge_templates(pdb_templates, foldseek_tmpls)
 
-        elif has_unpaired_msa and has_paired_msa and not has_templates:
-            # Has MSA, but doesn't have templates. Search for templates only.
-            empty_msa = msa.Msa.from_empty(
-                query_sequence=chain.sequence,
-                chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-            ).to_a3m()
-            unpaired_msa = chain.unpaired_msa or empty_msa
-            paired_msa = chain.paired_msa or empty_msa
+        elif not has_unpaired_msa and has_templates:
+            # Search MSA only — user provided templates (or [] = skip).
+            logging.info(
+                "Using user-provided templates for chain %s (%d), skipping template search",
+                chain.id, len(chain.templates),
+            )
+            unpaired_msa, paired_msa, _ = _get_protein_msa_and_templates(
+                sequence=chain.sequence,
+                run_template_search=False,
+                uniref90_msa_config=self._uniref90_msa_config,
+                mgnify_msa_config=self._mgnify_msa_config,
+                small_bfd_msa_config=self._small_bfd_msa_config,
+                uniprot_msa_config=self._uniprot_msa_config,
+                templates_config=self._templates_config,
+                pdb_database_path=self._pdb_database_path,
+                run_msa_sequential=self._run_msa_sequential,
+                temp_dir=self._temp_dir,
+                low_ram=self._low_ram,
+            )
+            unpaired_msa = unpaired_msa.to_a3m()
+            paired_msa = paired_msa.to_a3m()
+            templates = chain.templates
 
-            # Check for pre-computed template A3M
+        elif has_unpaired_msa and not has_templates:
+            # MSA provided (possibly empty=skip), search templates only.
+            unpaired_msa = chain.unpaired_msa or empty_msa_a3m
+            paired_msa = chain.paired_msa or empty_msa_a3m
+
             precomputed_templates_a3m = None
             if self._precomputed_templates_a3m_path:
                 try:
                     with open(self._precomputed_templates_a3m_path, "r") as f:
                         precomputed_templates_a3m = f.read()
-                    logging.info(
-                        "Loaded pre-computed templates A3M for chain %s (%d chars)",
-                        chain.id,
-                        len(precomputed_templates_a3m),
-                    )
                 except Exception as e:
                     logging.warning(
                         "Failed to load pre-computed templates: %s. Falling back to search.",
@@ -1222,38 +1266,17 @@ class DataPipeline:
                 )
                 for hit, struc in template_hits.get_hits_with_structures()
             ]
-
-            # Get Foldseek templates and merge with PDB templates
             foldseek_tmpls = self._get_foldseek_templates(chain.sequence)
             templates = self._merge_templates(pdb_templates, foldseek_tmpls)
 
         else:
-            # Has MSA and templates, don't search for anything.
-            if not has_unpaired_msa or not has_paired_msa or not has_templates:
-                raise ValueError(
-                    f"Protein chain {chain.id} has unpaired MSA, paired MSA, or"
-                    " templates set only partially. If you want to run the pipeline"
-                    " with custom MSA/templates, you need to set all of them. You can"
-                    " set MSA to empty string and templates to empty list to signify"
-                    " that they should not be used and searched for."
-                )
+            # Both MSA and templates user-provided. Skip all search.
             logging.info(
-                "Skipping MSA and template search for protein chain %s because it "
-                "already has MSAs and templates.",
+                "Using user-provided MSA + templates for chain %s, skipping all search",
                 chain.id,
             )
-            if not chain.unpaired_msa:
-                logging.info("Using empty unpaired MSA for protein chain %s", chain.id)
-            if not chain.paired_msa:
-                logging.info("Using empty paired MSA for protein chain %s", chain.id)
-            if not chain.templates:
-                logging.info("Using no templates for protein chain %s", chain.id)
-            empty_msa = msa.Msa.from_empty(
-                query_sequence=chain.sequence,
-                chain_poly_type=mmcif_names.PROTEIN_CHAIN,
-            ).to_a3m()
-            unpaired_msa = chain.unpaired_msa or empty_msa
-            paired_msa = chain.paired_msa or empty_msa
+            unpaired_msa = chain.unpaired_msa or empty_msa_a3m
+            paired_msa = chain.paired_msa or empty_msa_a3m
             templates = chain.templates
 
         return folding_input.ProteinChain(
@@ -1546,6 +1569,8 @@ class DataPipeline:
             gpu_device=mmseqs_cfg.gpu_device,
             threads=mmseqs_cfg.threads,
             temp_dir=self._temp_dir,
+            split_memory_limit=mmseqs_cfg.split_memory_limit,
+            low_ram=self._low_ram,
         )
 
         logging.info("Running batch MSA search across all databases...")
@@ -1650,31 +1675,34 @@ class DataPipeline:
                                 msas=[uniprot_msa], deduplicate=False
                             )
 
-                            # Run template search (depends on MSA, so still per-chain)
-                            has_templates = chain.templates is not None
-                            template_hits = _get_protein_templates(
-                                sequence=chain.sequence,
-                                input_msa_a3m=unpaired_protein_msa.to_a3m(),
-                                run_template_search=not has_templates,
-                                templates_config=self._templates_config,
-                                pdb_database_path=self._pdb_database_path,
-                            )
-
-                            pdb_templates = [
-                                folding_input.Template(
-                                    mmcif=struc.to_mmcif(),
-                                    query_to_template_map=hit.query_to_hit_mapping,
+                            if chain.templates is not None:
+                                # User-provided templates (or [] = skip): use as-is.
+                                logging.info(
+                                    "Using user-provided templates for chain %s (%d)",
+                                    chain.id, len(chain.templates),
                                 )
-                                for hit, struc in template_hits.get_hits_with_structures()
-                            ]
-
-                            # Get Foldseek templates and merge
-                            foldseek_tmpls = self._get_foldseek_templates(
-                                chain.sequence
-                            )
-                            templates = self._merge_templates(
-                                pdb_templates, foldseek_tmpls
-                            )
+                                templates = chain.templates
+                            else:
+                                template_hits = _get_protein_templates(
+                                    sequence=chain.sequence,
+                                    input_msa_a3m=unpaired_protein_msa.to_a3m(),
+                                    run_template_search=True,
+                                    templates_config=self._templates_config,
+                                    pdb_database_path=self._pdb_database_path,
+                                )
+                                pdb_templates = [
+                                    folding_input.Template(
+                                        mmcif=struc.to_mmcif(),
+                                        query_to_template_map=hit.query_to_hit_mapping,
+                                    )
+                                    for hit, struc in template_hits.get_hits_with_structures()
+                                ]
+                                foldseek_tmpls = self._get_foldseek_templates(
+                                    chain.sequence
+                                )
+                                templates = self._merge_templates(
+                                    pdb_templates, foldseek_tmpls
+                                )
 
                             processed_chain = folding_input.ProteinChain(
                                 id=chain.id,

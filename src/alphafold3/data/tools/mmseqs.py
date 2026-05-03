@@ -73,6 +73,7 @@ class Mmseqs(msa_tool.MsaTool):
         threads: int = 8,
         temp_dir: str | None = None,
         search_type: int | None = None,
+        split_memory_limit: str | None = None,
         **unused_kwargs,
     ):
         """Initializes the Python MMseqs2 wrapper.
@@ -95,6 +96,9 @@ class Mmseqs(msa_tool.MsaTool):
             Set to fast local storage on HPC clusters for better performance.
           search_type: MMseqs2 search type. None for auto-detect, 3 for nucleotide
             search. GPU is not supported for nucleotide (search_type=3).
+          split_memory_limit: If set, pass --split-memory-limit to MMseqs2 search
+            (e.g. "16G"). Splits the DB into chunks that fit in this budget,
+            preventing OOM on large databases.
 
         Raises:
           RuntimeError: If MMseqs2 binary not found at the path.
@@ -116,6 +120,7 @@ class Mmseqs(msa_tool.MsaTool):
         self._gpu_device = gpu_device
         self._threads = threads
         self._temp_dir = temp_dir
+        self._split_memory_limit = split_memory_limit
 
         # Verify the database exists
         if not os.path.exists(f"{database_path}.dbtype"):
@@ -444,6 +449,9 @@ class Mmseqs(msa_tool.MsaTool):
 
         if self._search_type is not None:
             cmd.extend(["--search-type", str(self._search_type)])
+
+        if self._split_memory_limit is not None:
+            cmd.extend(["--split-memory-limit", self._split_memory_limit])
 
         # GPU is not supported for nucleotide search (search_type=3).
         if self._gpu_enabled and self._search_type != 3:

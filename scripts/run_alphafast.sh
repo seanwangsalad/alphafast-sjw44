@@ -49,6 +49,8 @@ JAX_COMPILATION_CACHE_DIR=""
 JAX_CACHE_CONTAINER_DIR="/data/jax_cache"
 TEMP_DIR=""
 TEMP_DIR_CONTAINER="/data/temp_dir"
+MMSEQS_SPLIT_MEMORY_LIMIT=""
+LOW_RAM=""
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -85,6 +87,11 @@ usage() {
     echo "  --jax_compilation_cache_dir DIR"
     echo "                        Persistent JAX compilation cache directory to reuse"
     echo "                        compiled inference executables across runs."
+    echo "  --mmseqs_split_memory_limit MEM"
+    echo "                        MMseqs2 DB split memory limit (e.g. 16G, 32G)."
+    echo "                        Splits DB into chunks to avoid out-of-memory errors."
+    echo "  --lowram              Serialize MMseqs2 search + result2msa per DB."
+    echo "                        Disables pipelining. Slower but caps peak RAM."
     exit 1
 }
 
@@ -103,6 +110,8 @@ while [ "$#" -gt 0 ]; do
         --rna_mmseqs_db_dir) RNA_MMSEQS_DB_DIR="$2"; shift 2 ;;
         --use_nhmmer)   USE_NHMMER="true"; shift ;;
         --jax_compilation_cache_dir) JAX_COMPILATION_CACHE_DIR="$2"; shift 2 ;;
+        --mmseqs_split_memory_limit) MMSEQS_SPLIT_MEMORY_LIMIT="$2"; shift 2 ;;
+        --lowram) LOW_RAM="true"; shift ;;
         --help|-h)      usage ;;
         *)              echo "Unknown argument: $1"; usage ;;
     esac
@@ -280,6 +289,7 @@ run_container() {
     elif [ "$BACKEND" = "singularity" ]; then
         env "${singularity_env_args[@]}" \
             singularity exec --nv \
+                --bind "${SCRIPT_DIR}/..:/app/alphafold" \
                 --bind "${DB_DIR}:/data/public_databases" \
                 --bind "${MMSEQS_DB_DIR}:/data/mmseqs_databases" \
                 --bind "${WEIGHTS_DIR}:/data/models" \
@@ -332,6 +342,8 @@ if [ "$NUM_GPUS" -eq 1 ]; then
         --use_mmseqs_gpu \
         --batch_size="$BATCH_SIZE" \
         ${TEMP_DIR:+--temp_dir=${TEMP_DIR_CONTAINER}} \
+        ${MMSEQS_SPLIT_MEMORY_LIMIT:+--mmseqs_split_memory_limit=${MMSEQS_SPLIT_MEMORY_LIMIT}} \
+        ${LOW_RAM:+--lowram} \
         $RNA_FLAGS \
         2>&1 | tee "$PIPELINE_LOG"
 
@@ -379,6 +391,8 @@ else
         "SINGULARITYENV_CUDA_VISIBLE_DEVICES=${GPU_DEVICES}"
         "SINGULARITYENV_RNA_MMSEQS_DB_DIR=${MULTIGPU_RNA_DB_DIR}"
         "SINGULARITYENV_USE_NHMMER=${USE_NHMMER}"
+        "SINGULARITYENV_MMSEQS_SPLIT_MEMORY_LIMIT=${MMSEQS_SPLIT_MEMORY_LIMIT}"
+        "SINGULARITYENV_LOW_RAM=${LOW_RAM}"
     )
     if [ -n "$RNA_MMSEQS_DB_DIR" ]; then
         DOCKER_EXTRA_ARGS+=(
@@ -425,6 +439,8 @@ else
             -e CUDA_VISIBLE_DEVICES="${GPU_DEVICES}" \
             -e RNA_MMSEQS_DB_DIR="${MULTIGPU_RNA_DB_DIR}" \
             -e USE_NHMMER="${USE_NHMMER}" \
+            -e MMSEQS_SPLIT_MEMORY_LIMIT="${MMSEQS_SPLIT_MEMORY_LIMIT}" \
+            -e LOW_RAM="${LOW_RAM}" \
             -v "${DB_DIR}:/data/public_databases" \
             -v "${MMSEQS_DB_DIR}:/data/mmseqs_databases" \
             -v "${WEIGHTS_DIR}:/data/models" \
@@ -439,6 +455,7 @@ else
     elif [ "$BACKEND" = "singularity" ]; then
         env "${SINGULARITY_ENV_ARGS[@]}" \
             singularity exec --nv \
+                --bind "${SCRIPT_DIR}/..:/app/alphafold" \
                 --bind "${DB_DIR}:/data/public_databases" \
                 --bind "${MMSEQS_DB_DIR}:/data/mmseqs_databases" \
                 --bind "${WEIGHTS_DIR}:/data/models" \

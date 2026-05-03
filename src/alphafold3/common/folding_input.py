@@ -328,6 +328,9 @@ class ProteinChain:
             for mod in json_dict.get("modifications", [])
         ]
 
+        # AlphaFast convention: explicit null (key present with None) means
+        # "skip search, use empty". Key absent means "search" (AF3 default).
+        unpaired_msa_present = "unpairedMsa" in json_dict
         unpaired_msa = json_dict.get("unpairedMsa", None)
         unpaired_msa_path = json_dict.get("unpairedMsaPath", None)
         if unpaired_msa and unpaired_msa_path:
@@ -338,7 +341,10 @@ class ProteinChain:
             )
         elif unpaired_msa_path:
             unpaired_msa = _read_file(pathlib.Path(unpaired_msa_path), json_path)
+        elif unpaired_msa_present and unpaired_msa is None:
+            unpaired_msa = ""
 
+        paired_msa_present = "pairedMsa" in json_dict
         paired_msa = json_dict.get("pairedMsa", None)
         paired_msa_path = json_dict.get("pairedMsaPath", None)
         if paired_msa and paired_msa_path:
@@ -347,11 +353,15 @@ class ProteinChain:
             raise ValueError('Set the paired MSA path using the "pairedMsaPath" field.')
         elif paired_msa_path:
             paired_msa = _read_file(pathlib.Path(paired_msa_path), json_path)
+        elif paired_msa_present and paired_msa is None:
+            paired_msa = ""
 
+        templates_present = "templates" in json_dict
         raw_templates = json_dict.get("templates", None)
 
         if raw_templates is None:
-            templates = None
+            # Explicit null → skip template search ([]). Absent → search (None).
+            templates = [] if templates_present else None
         else:
             templates = []
             for raw_template in raw_templates:
@@ -592,6 +602,7 @@ class RnaChain:
             for mod in json_dict.get("modifications", [])
         ]
 
+        unpaired_msa_present = "unpairedMsa" in json_dict
         unpaired_msa = json_dict.get("unpairedMsa", None)
         unpaired_msa_path = json_dict.get("unpairedMsaPath", None)
         if unpaired_msa and unpaired_msa_path:
@@ -602,6 +613,8 @@ class RnaChain:
             )
         elif unpaired_msa_path:
             unpaired_msa = _read_file(pathlib.Path(unpaired_msa_path), json_path)
+        elif unpaired_msa_present and unpaired_msa is None:
+            unpaired_msa = ""
 
         return cls(
             id=seq_id or json_dict["id"],
@@ -953,6 +966,7 @@ class Input:
     rng_seeds: Sequence[int]
     bonded_atom_pairs: Sequence[tuple[BondAtomId, BondAtomId]] | None = None
     user_ccd: str | None = None
+    json_version: int = JSON_VERSION
 
     def __post_init__(self):
         if not self.rng_seeds:
@@ -1240,6 +1254,7 @@ class Input:
             rng_seeds=[int(seed) for seed in raw_json["modelSeeds"]],
             bonded_atom_pairs=bonded_atom_pairs,
             user_ccd=user_ccd,
+            json_version=int(raw_json["version"]),
         )
 
     @classmethod
@@ -1445,7 +1460,7 @@ class Input:
         alphafold_json = json.dumps(
             {
                 "dialect": JSON_DIALECT,
-                "version": JSON_VERSION,
+                "version": self.json_version,
                 "name": self.name,
                 "sequences": sequences,
                 "modelSeeds": self.rng_seeds,

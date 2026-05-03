@@ -54,6 +54,8 @@ export DB_DIR="${DB_DIR:-/data/public_databases}"
 export MMSEQS_DB_DIR="${MMSEQS_DB_DIR:-/data/mmseqs_databases}"
 export MODEL_DIR="${MODEL_DIR:-/data/models}"
 export TEMP_DIR="${TEMP_DIR:-}"
+export MMSEQS_SPLIT_MEMORY_LIMIT="${MMSEQS_SPLIT_MEMORY_LIMIT:-}"
+export LOW_RAM="${LOW_RAM:-}"
 
 # RNA search configuration: auto-detect mmseqs_rna/ unless USE_NHMMER is set.
 export USE_NHMMER="${USE_NHMMER:-}"
@@ -198,6 +200,8 @@ for ((i=0; i<NUM_GPUS; i++)); do
     --mmseqs_n_threads="$MMSEQS_THREADS" \
     --batch_size="$GPU_BATCH_SIZE" \
     ${TEMP_DIR:+--temp_dir="$TEMP_DIR"} \
+    ${MMSEQS_SPLIT_MEMORY_LIMIT:+--mmseqs_split_memory_limit="$MMSEQS_SPLIT_MEMORY_LIMIT"} \
+    ${LOW_RAM:+--lowram} \
     $RNA_GPU_FLAGS \
     > "$MSA_LOG" 2>&1 &
   MSA_PIDS+=("$!")

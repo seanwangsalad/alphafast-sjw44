@@ -302,6 +302,7 @@ def get_msa_tool(
                 threads=msa_tool_config.threads,
                 temp_dir=msa_tool_config.temp_dir,
                 search_type=msa_tool_config.search_type,
+                split_memory_limit=msa_tool_config.split_memory_limit,
             )
         case msa_config.NhmmerConfig():
             from alphafold3.data.tools import nhmmer
@@ -396,6 +397,7 @@ def get_msa_pipelined(
         threads=run_config.config.threads,
         temp_dir=run_config.config.temp_dir,
         search_type=run_config.config.search_type,
+        split_memory_limit=run_config.config.split_memory_limit,
     )
 
     # Get the future from pipelined query (GPU search runs now, post-processing async)
@@ -423,6 +425,7 @@ def get_msa_shared_db_pipelined(
     chain_poly_type: str,
     executor: futures.ThreadPoolExecutor,
     deduplicate: bool = False,
+    low_ram: bool = False,
 ) -> list[futures.Future["Msa"]]:
     """Get MSAs for a sequence across multiple databases using a shared query DB.
 
@@ -466,6 +469,7 @@ def get_msa_shared_db_pipelined(
             threads=run_config.config.threads,
             temp_dir=run_config.config.temp_dir,
             search_type=run_config.config.search_type,
+            split_memory_limit=run_config.config.split_memory_limit,
         )
 
         # Search using shared query DB (GPU search runs now, post-processing async)
@@ -496,5 +500,9 @@ def get_msa_shared_db_pipelined(
             )
 
         msa_futures.append(executor.submit(convert_result, msa_result_future))
+
+        if low_ram:
+            # Block on post-processing before next GPU search to cap peak RAM.
+            msa_result_future.result()
 
     return msa_futures

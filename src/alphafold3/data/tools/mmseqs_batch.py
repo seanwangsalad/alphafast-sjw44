@@ -83,6 +83,7 @@ class MmseqsBatch:
         threads: int = 8,
         temp_dir: str | None = None,
         search_type: int | None = None,
+        split_memory_limit: str | None = None,
     ):
         """Initialize batch searcher.
 
@@ -110,6 +111,7 @@ class MmseqsBatch:
         self._temp_dir = temp_dir
         self._search_type = search_type
         self._is_nucleotide = (search_type == 3)
+        self._split_memory_limit = split_memory_limit
 
         subprocess_utils.check_binary_exists(path=binary_path, name="MMseqs2")
 
@@ -283,6 +285,9 @@ class MmseqsBatch:
         if self._search_type is not None:
             cmd.extend(["--search-type", str(self._search_type)])
 
+        if self._split_memory_limit is not None:
+            cmd.extend(["--split-memory-limit", self._split_memory_limit])
+
         if self._gpu_enabled and self._search_type != 3:
             cmd.extend(["--gpu", "1"])
 
@@ -430,6 +435,8 @@ class MmseqsMultiDBBatch:
         gpu_device: int | None = None,
         threads: int = 8,
         temp_dir: str | None = None,
+        split_memory_limit: str | None = None,
+        low_ram: bool = False,
     ):
         """Initialize multi-database batch searcher.
 
@@ -453,6 +460,8 @@ class MmseqsMultiDBBatch:
         self._gpu_device = gpu_device
         self._threads = threads
         self._temp_dir = temp_dir
+        self._split_memory_limit = split_memory_limit
+        self._low_ram = low_ram
 
         # Default max sequences per database
         self._max_sequences_per_db = max_sequences_per_db or {
@@ -515,6 +524,7 @@ class MmseqsMultiDBBatch:
                         gpu_device=self._gpu_device,
                         threads=self._threads,
                         temp_dir=self._temp_dir,
+                        split_memory_limit=self._split_memory_limit,
                     )
 
                     # Submit search (will use its own temp dir for results)
@@ -604,9 +614,14 @@ class MmseqsMultiDBBatch:
                         db_name=db_name,
                     )
 
-                # Wait for all post-processing to complete
+                    if self._low_ram:
+                        # Block before next search to cap peak RAM.
+                        results[db_name] = pending_futures[db_name].result()
+
+                # Wait for any remaining post-processing
                 for db_name, future in pending_futures.items():
-                    results[db_name] = future.result()
+                    if db_name not in results:
+                        results[db_name] = future.result()
 
         finally:
             shutil.rmtree(query_db_dir, ignore_errors=True)
@@ -667,6 +682,9 @@ class MmseqsMultiDBBatch:
             "--max-seqs",
             str(max_seqs),
         ]
+
+        if self._split_memory_limit is not None:
+            cmd.extend(["--split-memory-limit", self._split_memory_limit])
 
         if self._gpu_enabled:
             cmd.extend(["--gpu", "1"])

@@ -115,6 +115,9 @@ class MmseqsConfig:
       threads: Number of CPU threads for non-GPU parts of the search.
       temp_dir: Directory for temporary files. If None, uses system default.
         Set to fast local storage on HPC clusters for better performance.
+      split_memory_limit: Memory limit for database splitting (e.g. "16G").
+        MMseqs2 splits the DB into chunks that fit in this budget. If None,
+        MMseqs2 loads the full DB at once, which OOMs on large databases.
     """
 
     binary_path: str
@@ -127,6 +130,7 @@ class MmseqsConfig:
     threads: int = 8
     temp_dir: str | None = None
     search_type: int | None = None  # 3 for nucleotide search
+    split_memory_limit: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True, slots=True)

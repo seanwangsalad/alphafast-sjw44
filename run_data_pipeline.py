@@ -134,6 +134,44 @@ _TEMP_DIR = flags.DEFINE_string(
     "uses the system default temp directory.",
 )
 
+def _default_mmseqs_split_memory_limit() -> str:
+    """Default split limit: ~50% of currently-available RAM (GB).
+
+    Pipelined searches overlap two MMseqs2 procs (current search + prior
+    result2msa) plus query DB. Use available (not total) so we don't OOM
+    when other processes already hold RAM.
+    """
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    kb_avail = int(line.split()[1])
+                    break
+            else:
+                kb_avail = os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") // 1024
+    except (OSError, ValueError):
+        kb_avail = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") // 1024
+    gb = max(1, int(kb_avail * 0.5 / (1024 ** 2)))
+    return f"{gb}G"
+
+
+_LOW_RAM = flags.DEFINE_bool(
+    "lowram",
+    False,
+    "Low-RAM mode: serialize MMseqs2 search and result2msa per database "
+    "(disables pipelining). Use when concurrent search + post-processing "
+    "exhausts system RAM. Slower but safer.",
+)
+
+_MMSEQS_SPLIT_MEMORY_LIMIT = flags.DEFINE_string(
+    "mmseqs_split_memory_limit",
+    _default_mmseqs_split_memory_limit(),
+    "Memory limit for MMseqs2 database splitting (e.g. '16G', '32G'). "
+    "MMseqs2 splits the database into chunks that fit in this budget instead "
+    "of loading the full database at once. Default is ~75%% of system RAM. "
+    "Pass empty string to disable (MMseqs2 default: load full database).",
+)
+
 # Batch processing configuration.
 _BATCH_SIZE = flags.DEFINE_integer(
     "batch_size",
@@ -577,6 +615,8 @@ def main(_):
         mmseqs_n_threads=_MMSEQS_N_THREADS.value,
         mmseqs_sequential=_MMSEQS_SEQUENTIAL.value,
         temp_dir=_TEMP_DIR.value,
+        mmseqs_split_memory_limit=_MMSEQS_SPLIT_MEMORY_LIMIT.value or None,
+        low_ram=_LOW_RAM.value,
         # Template search thresholds
         template_e_value=_TEMPLATE_E_VALUE.value,
         template_min_coverage=_TEMPLATE_MIN_COVERAGE.value,
