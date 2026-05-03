@@ -110,6 +110,8 @@ Create a directory of input `.json` files. See [docs/input_format.md](docs/input
 }
 ```
 
+**AlphaFast JSON extensions:** Setting `"unpairedMsa": null`, `"pairedMsa": null`, or `"templates": null` explicitly **skips** the corresponding search and uses an empty MSA / no templates. Omitting the key entirely runs the search (stock AF3 default behavior). See [docs/input_format.md](docs/input_format.md).
+
 **RNA-Protein Complex:**
 
 ```json
@@ -177,6 +179,41 @@ Use `--jax_compilation_cache_dir` to persist JAX/XLA compilations across runs. T
 ```
 
 This requires RNA FASTA fallback files to be present, e.g. from `./scripts/setup_databases.sh /path/to/databases --include-nhmmer`.
+
+### AlphaFast-Specific Flags
+
+These flags extend stock AlphaFold 3:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--temp_dir DIR` | system `$TMPDIR` (`/tmp`) | Host directory for MMseqs2 scratch (queryDB, intermediate result DBs). Bind-mounted into container at `/data/temp_dir`. Use `/scratch/$USER/...` on HPC where `/tmp` is small or slow. |
+| `--mmseqs_split_memory_limit MEM` | unset (MMseqs2 loads full DB) | Caps MMseqs2 RAM via `--split-memory-limit`. MMseqs2 will chunk large databases instead of loading them whole. Pass explicit values like `8G`, `32G`. |
+| `--lowram` | off | Disables MSA pipelining. Each DB search waits for the previous `result2msa` to finish before starting. Slower but caps peak RAM to a single DB at a time. Use when even `--mmseqs_split_memory_limit` is not enough (e.g. very small node, many concurrent jobs). |
+| `--gpu_devices LIST` | `0` | Comma-separated GPU indices for multi-GPU phase-separated parallelism (e.g. `0,1,2,3`). |
+| `--jax_compilation_cache_dir DIR` | unset | Persist JAX/XLA compilations across runs. Recommended on multi-GPU and repeated batches. |
+| `--use_nhmmer` | off | Force nhmmer for RNA MSA instead of MMseqs2. Requires RNA FASTA fallback files. |
+
+### Low-RAM / Memory-Constrained Runs
+
+AlphaFast pipelines MMseqs2 searches by default — the next DB search starts while the previous `result2msa` step is still finishing. This overlaps two MMseqs2 processes plus the query DB in RAM, so total peak memory can exceed any single search's footprint.
+
+Two flags control this:
+
+```bash
+./scripts/run_alphafast.sh \
+    --input_dir /path/to/inputs \
+    --output_dir /path/to/outputs \
+    --db_dir /path/to/databases \
+    --weights_dir /path/to/weights \
+    --temp_dir /scratch/$USER/alphafast_tmp \
+    --mmseqs_split_memory_limit 8G \
+    --lowram
+```
+
+- `--mmseqs_split_memory_limit 8G` — chunk database loads to ≤ 8 GB per MMseqs2 process. Unset by default (MMseqs2 loads full DB); set this when RAM is tight.
+- `--lowram` — serialize MSA stages so only one MMseqs2 process is resident at a time. Slower (no overlap) but predictable RAM ceiling.
+
+Use both together on tight nodes; either alone may be enough on roomier ones.
 
 ### How Multi-GPU Mode Works
 
@@ -317,6 +354,11 @@ See [docs/modal.md](docs/modal.md) for the full CLI reference, batch processing,
 | `--container` | `romerolabduke/alphafast:latest` | Docker image or `.sif` path |
 | `--batch_size` | auto (count of inputs) | MSA batch size |
 | `--backend` | auto-detect | Force `docker` or `singularity` |
+| `--temp_dir` | system tmpdir | Host directory for MMseqs2 scratch (bind-mounted to `/data/temp_dir`) |
+| `--mmseqs_split_memory_limit` | unset | Cap per-process MMseqs2 RAM (e.g. `8G`); chunks large DBs |
+| `--lowram` | off | Serialize MSA stages so only one MMseqs2 process resides in RAM at a time |
+| `--jax_compilation_cache_dir` | unset | Persist JAX/XLA compilations across runs |
+| `--use_nhmmer` | off | Force nhmmer for RNA MSA (requires RNA FASTA fallback) |
 
 For advanced flags, see [docs/advanced.md](docs/advanced.md).
 

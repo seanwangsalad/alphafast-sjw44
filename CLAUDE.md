@@ -65,7 +65,7 @@ Multi-GPU mode runs both stages in parallel across N GPUs via phase separation (
 
 Changes on top of upstream AlphaFast:
 
-1. **`--mmseqs_split_memory_limit`** — caps MMseqs2 RAM so it chunks large DBs; default = ~50% of `MemAvailable`. Plumbed through `MmseqsConfig` → `Mmseqs`/`MmseqsBatch`/`MmseqsMultiDBBatch` → `run_data_pipeline.py` → shell scripts.
+1. **`--mmseqs_split_memory_limit`** — caps MMseqs2 RAM so it chunks large DBs; default unset = MMseqs2 loads full DB. Plumbed through `MmseqsConfig` → `Mmseqs`/`MmseqsBatch`/`MmseqsMultiDBBatch` → `run_data_pipeline.py` → shell scripts.
 
 2. **`--lowram`** — disables pipelining; waits for `result2msa` to finish before starting next DB search. Slower, but caps peak RAM to one DB at a time.
 
