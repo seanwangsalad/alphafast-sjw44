@@ -1710,8 +1710,6 @@ class DataPipeline:
                             ]
 
                             # Preserve any user-supplied templates from the input JSON.
-                            # When the user provided templates, run_template_search was False
-                            # above, so pdb_templates is []; we still want their templates kept.
                             user_templates = list(chain.templates) if chain.templates else []
 
                             # Get Foldseek templates and merge
